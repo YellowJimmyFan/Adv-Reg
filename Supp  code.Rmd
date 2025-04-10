@@ -1,0 +1,1099 @@
+---
+title: "STAT 444/844 Winter 2024 Final Project Supplementary Material"
+author: "Chase(Daolin) An"
+date: "UW ID: 20885166"
+output: 
+    pdf_document:
+      toc: true
+      latex_engine: xelatex
+      number_sections: yes
+---
+
+\newpage
+
+# Preprocessing
+
+## Loading data and add new variables
+```{r Loading data and add new variables, cache=TRUE, message=FALSE}
+rm(list=ls())
+load("Final.Rdata")
+library(mgcv)
+library(randomForest)
+library(rfPermute)
+library(gbm)
+set.seed(20885166)
+## Check the number of missing values
+ayb.missing <- sum(is.na(dat$ayb)); ayb.missing
+yr_rmdl.missing <- sum(is.na(dat$yr_rmdl)); yr_rmdl.missing
+stories.missing <- sum(is.na(dat$stories)); stories.missing
+kitchens.missing <- sum(is.na(dat$kitchens)); kitchens.missing
+quadrant.missing <- sum(is.na(dat$quadrant)); quadrant.missing
+
+## Add new variables
+dat$rmdled <- ifelse(is.na(dat$yr_rmdl), "N", "Y")
+plot(dat$latitude, dat$longitude, col=adjustcolor("steelblue",0.6))
+abline(v=40.705, col="red")
+abline(h=-74.16, col="red")
+dat$location[which(dat$latitude >= 40.705 & dat$longitude >= -74.16)] <- "A"
+dat$location[which(dat$latitude <= 40.705 & dat$longitude >= -74.16)] <- "S"
+dat$location[which(dat$latitude <= 40.705 & dat$longitude <= -74.16)] <- "T"
+dat$location[which(dat$latitude >= 40.705 & dat$longitude <= -74.16)] <- "C"
+```
+
+## Changing the format of dates(years -> days)
+```{r Change the format of dates, cache=TRUE}
+dat$ayb <- as.numeric(as.Date(as.character(dat$ayb), format = "%Y"))
+dat$yr_rmdl <- as.numeric(as.Date(as.character(dat$yr_rmdl), format = "%Y"))
+dat$eyb <- as.numeric(as.Date(as.character(dat$eyb), format = "%Y"))
+dat$saledate <- as.numeric(as.Date(dat$saledate))
+```
+
+## Missing data handling
+```{r Missing data handling, cache=TRUE}
+dat$ayb[which(is.na(dat$ayb))] <- mean(dat$ayb, na.rm = TRUE)
+dat$stories[which(is.na(dat$stories))] <- mean(dat$stories, na.rm = TRUE)
+dat$kitchens[which(is.na(dat$kitchens))] <- mean(dat$kitchens, na.rm = TRUE)
+quadrant.mode <- names(sort(table(dat$quadrant), decreasing = TRUE))[1]
+dat$quadrant[which(is.na(dat$quadrant))] <- quadrant.mode
+dat$yr_rmdl[which(is.na(dat$yr_rmdl))] <- dat$ayb[is.na(dat$yr_rmdl)]
+# Again new variables are added
+dat$dsRM <- dat$saledate - dat$yr_rmdl
+dat$dsIM <- dat$saledate - dat$eyb
+dat$dsBT <- dat$saledate - dat$ayb
+```
+
+## Transformation and plotting
+```{r Transformation and plotting, cache=TRUE}
+dat$price <- log(dat$price)
+dat$landarea <- sqrt(dat$landarea)
+par(mfrow = c(2, 3))
+plot(dat$bathrm, dat$price, xlab = "bathrm", ylab = "price",
+     main = "price vs bathrm", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$hf_bathrm, dat$price, xlab = "hf_bathrm", ylab = "price",
+     main = "price vs hf_bathrm", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$rooms, dat$price, xlab = "rooms", ylab = "price",
+     main = "price vs rooms", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$bedrm, dat$price, xlab = "bedrm", ylab = "price",
+     main = "price vs bedrm", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$ayb, dat$price, xlab = "ayb", ylab = "price",
+     main = "price vs ayb", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$yr_rmdl, dat$price, xlab = "yr_rmdl", ylab = "price",
+     main = "price vs yr_rmdl", pch=19, col=adjustcolor("firebrick",0.4))
+par(mfrow = c(2, 3))
+plot(dat$eyb, dat$price, xlab = "eyb", ylab = "price",
+     main = "price vs eyb", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$stories, dat$price, xlab = "stories", ylab = "price",
+     main = "price vs stories", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$saledate, dat$price, xlab = "saledate", ylab = "price",
+     main = "price vs saledate", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$gba, dat$price, xlab = "gba", ylab = "price",
+     main = "price vs gba", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$kitchens, dat$price, xlab = "kitchens", ylab = "price",
+     main = "price vs kitchens", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$fireplaces, dat$price, xlab = "fireplaces", ylab = "price",
+     main = "price vs fireplaces", pch=19, col=adjustcolor("firebrick",0.4))
+par(mfrow = c(1, 3))
+plot(dat$landarea, dat$price, xlab = "landarea", ylab = "price",
+     main = "price vs landarea", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$latitude, dat$price, xlab = "latitude", ylab = "price",
+     main = "price vs latitude", pch=19, col=adjustcolor("firebrick",0.4))
+plot(dat$longitude, dat$price, xlab = "longitude", ylab = "price",
+     main = "price vs longitude", pch=19, col=adjustcolor("firebrick",0.4))
+```
+
+## Extreme value handling
+```{r Extreme value handling, cache=TRUE}
+## from the plot, notice that there are outliers in bathrm, hf_bathrm, rooms,
+##   bedrm, ayb, stories(so unreasonable), gba, kitchens, fireplaces, landarea
+table(dat$bathrm, dat$hf_bathrm)
+dat$bathrm[which(dat$bathrm==11 | dat$bathrm==12)] <- 10
+dat$hf_bathrm[which(dat$hf_bathrm==4)] <- 3
+
+table(dat$rooms, dat$bedrm)
+dat$rooms[which(dat$rooms > 17)] <- 17
+dat$rooms[which(dat$rooms < 3)] <- 3
+dat$bedrm[which(dat$bedrm > 9)] <- 9
+dat$bedrm[which(dat$bedrm < 1)] <- 1
+
+table(dat$stories, dat$style)
+dat$stories[which(dat$stories > 3)] <- 3
+
+dat$kitchens[which(dat$kitchens < 1)] <- 1
+dat$kitchens[which(dat$kitchens > 2)] <- 2
+
+dat$fireplaces[which(dat$fireplaces > 6)] <- 6
+```
+\newpage
+
+# Levels checking
+
+## Fold1 as testing
+```{r Level checking fold1, cache=TRUE}
+# Fold1 check
+fold1.testing <- dat[which(fold==1), ]
+fold1.training <- dat[which(fold!=1), ]
+fold1.training$heat <- as.factor(fold1.training$heat)
+fold1.training$ac <- as.factor(fold1.training$ac)
+fold1.training$style <- as.factor(fold1.training$style)
+fold1.training$grade <- as.factor(fold1.training$grade)
+fold1.training$cndtn <- as.factor(fold1.training$cndtn)
+fold1.training$extwall <- as.factor(fold1.training$extwall)
+fold1.training$roof <- as.factor(fold1.training$roof)
+fold1.training$intwall <- as.factor(fold1.training$intwall)
+fold1.training$nbhd <- as.factor(fold1.training$nbhd)
+fold1.training$ward <- as.factor(fold1.training$ward)
+fold1.training$quadrant <- as.factor(fold1.training$quadrant)
+fold1.training$rmdled <- as.factor(fold1.training$rmdled)
+fold1.training$location <- as.factor(fold1.training$location)
+fold1.testing$heat <- as.factor(fold1.testing$heat)
+fold1.testing$ac <- as.factor(fold1.testing$ac)
+fold1.testing$style <- as.factor(fold1.testing$style)
+fold1.testing$grade <- as.factor(fold1.testing$grade)
+fold1.testing$cndtn <- as.factor(fold1.testing$cndtn)
+fold1.testing$extwall <- as.factor(fold1.testing$extwall)
+fold1.testing$roof <- as.factor(fold1.testing$roof)
+fold1.testing$intwall <- as.factor(fold1.testing$intwall)
+fold1.testing$nbhd <- as.factor(fold1.testing$nbhd)
+fold1.testing$ward <- as.factor(fold1.testing$ward)
+fold1.testing$quadrant <- as.factor(fold1.testing$quadrant)
+fold1.testing$rmdled <- as.factor(fold1.testing$rmdled)
+fold1.testing$location <- as.factor(fold1.testing$location)
+heat.mismatched1 <- setdiff(levels(fold1.testing$heat), levels(fold1.training$heat))
+ac.mismatched1 <- setdiff(levels(fold1.testing$ac), levels(fold1.training$ac))
+style.mismatched1 <- setdiff(levels(fold1.testing$style), levels(fold1.training$style))
+grade.mismatched1 <- setdiff(levels(fold1.testing$grade), levels(fold1.training$grade))
+cndtn.mismatched1 <- setdiff(levels(fold1.testing$cndtn), levels(fold1.training$cndtn))
+extwall.mismatched1 <- setdiff(levels(fold1.testing$extwall), levels(fold1.training$extwall))
+roof.mismatched1 <- setdiff(levels(fold1.testing$roof), levels(fold1.training$roof))
+intwall.mismatched1 <- setdiff(levels(fold1.testing$intwall), levels(fold1.training$intwall))
+nbhd.mismatched1 <- setdiff(levels(fold1.testing$nbhd), levels(fold1.training$nbhd))
+ward.mismatched1 <- setdiff(levels(fold1.testing$ward), levels(fold1.training$ward))
+quadrant.mismatched1 <- setdiff(levels(fold1.testing$quadrant), levels(fold1.training$quadrant))
+rmdled.mismatched1 <- setdiff(levels(fold1.testing$rmdled), levels(fold1.training$rmdled))
+location.mismatched1 <- setdiff(levels(fold1.testing$location), levels(fold1.training$location))
+## Only roof and intwall have mismatches in fold1
+roof.mismatched1; intwall.mismatched1
+
+avgprice.Composition1 <- mean(fold1.testing$price[fold1.testing$roof == "Composition Ro"])
+roof.levels1 <- levels(fold1.training$roof)
+avgprices.roof1 <- numeric(length(roof.levels1))
+for (i in 1:length(roof.levels1)) {
+  avgprices.roof1[i] <- mean(fold1.training$price[fold1.training$roof == roof.levels1[i]])
+}; roof.cloestmatch1 <- roof.levels1[which.min(abs(avgprices.roof1 - avgprice.Composition1))]
+
+avgprice.Terrazo1 <- mean(fold1.testing$price[fold1.testing$intwall == "Terrazo"])
+avgprice.Vinyl1 <- mean(fold1.testing$price[fold1.testing$intwall == "Vinyl Sheet"])
+intwall.levels1 <- levels(fold1.training$intwall)
+avgprices.intwall1 <- numeric(length(intwall.levels1))
+for (i in 1:length(intwall.levels1)) {
+  avgprices.intwall1[i] <- mean(fold1.training$price[fold1.training$intwall == intwall.levels1[i]])
+} 
+Terrazo_intwall.cloestmatch1 <- intwall.levels1[which.min(abs(avgprices.intwall1 - avgprice.Terrazo1))]
+Vinyl_intwall.cloestmatch1 <- intwall.levels1[which.min(abs(avgprices.intwall1 - avgprice.Vinyl1))]
+## Note they match to the same level, so I assign a single variable to hold the value
+Terrazo_intwall.cloestmatch1; Vinyl_intwall.cloestmatch1
+intwall.cloestmatch1 <- Terrazo_intwall.cloestmatch1
+```
+
+## Fold2 as testing
+```{r Level checking fold2, cache=TRUE}
+# Fold2 check
+fold2.testing <- dat[which(fold==2), ]
+fold2.training <- dat[which(fold!=2), ]
+fold2.training$heat <- as.factor(fold2.training$heat)
+fold2.training$ac <- as.factor(fold2.training$ac)
+fold2.training$style <- as.factor(fold2.training$style)
+fold2.training$grade <- as.factor(fold2.training$grade)
+fold2.training$cndtn <- as.factor(fold2.training$cndtn)
+fold2.training$extwall <- as.factor(fold2.training$extwall)
+fold2.training$roof <- as.factor(fold2.training$roof)
+fold2.training$intwall <- as.factor(fold2.training$intwall)
+fold2.training$nbhd <- as.factor(fold2.training$nbhd)
+fold2.training$ward <- as.factor(fold2.training$ward)
+fold2.training$quadrant <- as.factor(fold2.training$quadrant)
+fold2.training$rmdled <- as.factor(fold2.training$rmdled)
+fold2.training$location <- as.factor(fold2.training$location)
+fold2.testing$heat <- as.factor(fold2.testing$heat)
+fold2.testing$ac <- as.factor(fold2.testing$ac)
+fold2.testing$style <- as.factor(fold2.testing$style)
+fold2.testing$grade <- as.factor(fold2.testing$grade)
+fold2.testing$cndtn <- as.factor(fold2.testing$cndtn)
+fold2.testing$extwall <- as.factor(fold2.testing$extwall)
+fold2.testing$roof <- as.factor(fold2.testing$roof)
+fold2.testing$intwall <- as.factor(fold2.testing$intwall)
+fold2.testing$nbhd <- as.factor(fold2.testing$nbhd)
+fold2.testing$ward <- as.factor(fold2.testing$ward)
+fold2.testing$quadrant <- as.factor(fold2.testing$quadrant)
+fold2.testing$rmdled <- as.factor(fold2.testing$rmdled)
+fold2.testing$location <- as.factor(fold2.testing$location)
+heat.mismatched2 <- setdiff(levels(fold2.testing$heat), levels(fold2.training$heat))
+ac.mismatched2 <- setdiff(levels(fold2.testing$ac), levels(fold2.training$ac))
+style.mismatched2 <- setdiff(levels(fold2.testing$style), levels(fold2.training$style))
+grade.mismatched2 <- setdiff(levels(fold2.testing$grade), levels(fold2.training$grade))
+cndtn.mismatched2 <- setdiff(levels(fold2.testing$cndtn), levels(fold2.training$cndtn))
+extwall.mismatched2 <- setdiff(levels(fold2.testing$extwall), levels(fold2.training$extwall))
+roof.mismatched2 <- setdiff(levels(fold2.testing$roof), levels(fold2.training$roof))
+intwall.mismatched2 <- setdiff(levels(fold2.testing$intwall), levels(fold2.training$intwall))
+nbhd.mismatched2 <- setdiff(levels(fold2.testing$nbhd), levels(fold2.training$nbhd))
+ward.mismatched2 <- setdiff(levels(fold2.testing$ward), levels(fold2.training$ward))
+quadrant.mismatched2 <- setdiff(levels(fold2.testing$quadrant), levels(fold2.training$quadrant))
+rmdled.mismatched2 <- setdiff(levels(fold2.testing$rmdled), levels(fold2.training$rmdled))
+location.mismatched2 <- setdiff(levels(fold2.testing$location), levels(fold2.training$location))
+## Only heat has mismatches in fold2
+heat.mismatched2
+
+avgprice.AirEx2 <- mean(fold2.testing$price[fold2.testing$heat == "Air Exchng"])
+heat.levels2 <- levels(fold2.training$heat)
+avgprices.heat2 <- numeric(length(heat.levels2))
+for (i in 1:length(heat.levels2)) {
+  avgprices.heat2[i] <- mean(fold2.training$price[fold2.training$heat == heat.levels2[i]])
+}; heat.cloestmatch2 <- heat.levels2[which.min(abs(avgprices.heat2 - avgprice.AirEx2))]
+heat.cloestmatch2
+```
+
+## Fold3 as testing
+```{r Level checking fold3, cache=TRUE}
+# Fold3 check
+fold3.testing <- dat[which(fold==3), ]
+fold3.training <- dat[which(fold!=3), ]
+fold3.training$heat <- as.factor(fold3.training$heat)
+fold3.training$ac <- as.factor(fold3.training$ac)
+fold3.training$style <- as.factor(fold3.training$style)
+fold3.training$grade <- as.factor(fold3.training$grade)
+fold3.training$cndtn <- as.factor(fold3.training$cndtn)
+fold3.training$extwall <- as.factor(fold3.training$extwall)
+fold3.training$roof <- as.factor(fold3.training$roof)
+fold3.training$intwall <- as.factor(fold3.training$intwall)
+fold3.training$nbhd <- as.factor(fold3.training$nbhd)
+fold3.training$ward <- as.factor(fold3.training$ward)
+fold3.training$quadrant <- as.factor(fold3.training$quadrant)
+fold3.training$rmdled <- as.factor(fold3.training$rmdled)
+fold3.training$location <- as.factor(fold3.training$location)
+fold3.testing$heat <- as.factor(fold3.testing$heat)
+fold3.testing$ac <- as.factor(fold3.testing$ac)
+fold3.testing$style <- as.factor(fold3.testing$style)
+fold3.testing$grade <- as.factor(fold3.testing$grade)
+fold3.testing$cndtn <- as.factor(fold3.testing$cndtn)
+fold3.testing$extwall <- as.factor(fold3.testing$extwall)
+fold3.testing$roof <- as.factor(fold3.testing$roof)
+fold3.testing$intwall <- as.factor(fold3.testing$intwall)
+fold3.testing$nbhd <- as.factor(fold3.testing$nbhd)
+fold3.testing$ward <- as.factor(fold3.testing$ward)
+fold3.testing$quadrant <- as.factor(fold3.testing$quadrant)
+fold3.testing$rmdled <- as.factor(fold3.testing$rmdled)
+fold3.testing$location <- as.factor(fold3.testing$location)
+heat.mismatched3 <- setdiff(levels(fold3.testing$heat), levels(fold3.training$heat))
+ac.mismatched3 <- setdiff(levels(fold3.testing$ac), levels(fold3.training$ac))
+style.mismatched3 <- setdiff(levels(fold3.testing$style), levels(fold3.training$style))
+grade.mismatched3 <- setdiff(levels(fold3.testing$grade), levels(fold3.training$grade))
+cndtn.mismatched3 <- setdiff(levels(fold3.testing$cndtn), levels(fold3.training$cndtn))
+extwall.mismatched3 <- setdiff(levels(fold3.testing$extwall), levels(fold3.training$extwall))
+roof.mismatched3 <- setdiff(levels(fold3.testing$roof), levels(fold3.training$roof))
+intwall.mismatched3 <- setdiff(levels(fold3.testing$intwall), levels(fold3.training$intwall))
+nbhd.mismatched3 <- setdiff(levels(fold3.testing$nbhd), levels(fold3.training$nbhd))
+ward.mismatched3 <- setdiff(levels(fold3.testing$ward), levels(fold3.training$ward))
+quadrant.mismatched3 <- setdiff(levels(fold3.testing$quadrant), levels(fold3.training$quadrant))
+rmdled.mismatched3 <- setdiff(levels(fold3.testing$rmdled), levels(fold3.training$rmdled))
+location.mismatched3 <- setdiff(levels(fold3.testing$location), levels(fold3.training$location))
+## Only style and roof have mismatches in fold3
+style.mismatched3; roof.mismatched3
+
+avgprice.Default3 <- mean(fold3.testing$price[fold3.testing$style == "Default"])
+style.levels3 <- levels(fold3.training$style)
+avgprices.style3 <- numeric(length(style.levels3))
+for (i in 1:length(style.levels3)) {
+  avgprices.style3[i] <- mean(fold3.training$price[fold3.training$style == style.levels3[i]])
+}; style.cloestmatch3 <- style.levels3[which.min(abs(avgprices.style3 - avgprice.Default3))]
+style.cloestmatch3
+
+avgprice.Metal3 <- mean(fold3.testing$price[fold3.testing$roof == "Metal- Pre"])
+roof.levels3 <- levels(fold3.training$roof)
+avgprices.roof3 <- numeric(length(roof.levels3))
+for (i in 1:length(roof.levels3)) {
+  avgprices.roof3[i] <- mean(fold3.training$price[fold3.training$roof == roof.levels3[i]])
+}; roof.cloestmatch3 <- roof.levels3[which.min(abs(avgprices.roof3 - avgprice.Metal3))]
+roof.cloestmatch3
+```
+
+## Fold4 as testing
+```{r Level checking fold4, cache=TRUE}
+# Fold4 check
+fold4.testing <- dat[which(fold==4), ]
+fold4.training <- dat[which(fold!=4), ]
+fold4.training$heat <- as.factor(fold4.training$heat)
+fold4.training$ac <- as.factor(fold4.training$ac)
+fold4.training$style <- as.factor(fold4.training$style)
+fold4.training$grade <- as.factor(fold4.training$grade)
+fold4.training$cndtn <- as.factor(fold4.training$cndtn)
+fold4.training$extwall <- as.factor(fold4.training$extwall)
+fold4.training$roof <- as.factor(fold4.training$roof)
+fold4.training$intwall <- as.factor(fold4.training$intwall)
+fold4.training$nbhd <- as.factor(fold4.training$nbhd)
+fold4.training$ward <- as.factor(fold4.training$ward)
+fold4.training$quadrant <- as.factor(fold4.training$quadrant)
+fold4.training$rmdled <- as.factor(fold4.training$rmdled)
+fold4.training$location <- as.factor(fold4.training$location)
+fold4.testing$heat <- as.factor(fold4.testing$heat)
+fold4.testing$ac <- as.factor(fold4.testing$ac)
+fold4.testing$style <- as.factor(fold4.testing$style)
+fold4.testing$grade <- as.factor(fold4.testing$grade)
+fold4.testing$cndtn <- as.factor(fold4.testing$cndtn)
+fold4.testing$extwall <- as.factor(fold4.testing$extwall)
+fold4.testing$roof <- as.factor(fold4.testing$roof)
+fold4.testing$intwall <- as.factor(fold4.testing$intwall)
+fold4.testing$nbhd <- as.factor(fold4.testing$nbhd)
+fold4.testing$ward <- as.factor(fold4.testing$ward)
+fold4.testing$quadrant <- as.factor(fold4.testing$quadrant)
+fold4.testing$rmdled <- as.factor(fold4.testing$rmdled)
+fold4.testing$location <- as.factor(fold4.testing$location)
+heat.mismatched4 <- setdiff(levels(fold4.testing$heat), levels(fold4.training$heat))
+ac.mismatched4 <- setdiff(levels(fold4.testing$ac), levels(fold4.training$ac))
+style.mismatched4 <- setdiff(levels(fold4.testing$style), levels(fold4.training$style))
+grade.mismatched4 <- setdiff(levels(fold4.testing$grade), levels(fold4.training$grade))
+cndtn.mismatched4 <- setdiff(levels(fold4.testing$cndtn), levels(fold4.training$cndtn))
+extwall.mismatched4 <- setdiff(levels(fold4.testing$extwall), levels(fold4.training$extwall))
+roof.mismatched4 <- setdiff(levels(fold4.testing$roof), levels(fold4.training$roof))
+intwall.mismatched4 <- setdiff(levels(fold4.testing$intwall), levels(fold4.training$intwall))
+nbhd.mismatched4 <- setdiff(levels(fold4.testing$nbhd), levels(fold4.training$nbhd))
+ward.mismatched4 <- setdiff(levels(fold4.testing$ward), levels(fold4.training$ward))
+quadrant.mismatched4 <- setdiff(levels(fold4.testing$quadrant), levels(fold4.training$quadrant))
+rmdled.mismatched4 <- setdiff(levels(fold4.testing$rmdled), levels(fold4.training$rmdled))
+location.mismatched4 <- setdiff(levels(fold4.testing$location), levels(fold4.training$location))
+## Only extwall and intwall have mismatches in fold4
+extwall.mismatched4; intwall.mismatched4
+
+avgprice.StuBl4 <- mean(fold4.testing$price[fold4.testing$extwall == "Stucco Block"])
+extwall.levels4 <- levels(fold4.training$extwall)
+avgprices.extwall4 <- numeric(length(extwall.levels4))
+for (i in 1:length(extwall.levels4)) {
+  avgprices.extwall4[i] <- mean(fold4.training$price[fold4.training$extwall == extwall.levels4[i]])
+}; extwall.cloestmatch4 <- extwall.levels4[which.min(abs(avgprices.extwall4 - avgprice.StuBl4))]
+extwall.cloestmatch4
+
+avgprice.Parquet4 <- mean(fold4.testing$price[fold4.testing$intwall == "Parquet"])
+intwall.levels4 <- levels(fold4.training$intwall)
+avgprices.intwall4 <- numeric(length(intwall.levels4))
+for (i in 1:length(intwall.levels4)) {
+  avgprices.intwall4[i] <- mean(fold4.training$price[fold4.training$intwall == intwall.levels4[i]])
+}; intwall.cloestmatch4 <- intwall.levels4[which.min(abs(avgprices.intwall4 - avgprice.Parquet4))]
+intwall.cloestmatch4
+```
+
+## Fold5 as testing
+```{r Level checking fold5, cache=TRUE}
+# Fold5 check
+fold5.testing <- dat[which(fold==5), ]
+fold5.training <- dat[which(fold!=5), ]
+fold5.training$heat <- as.factor(fold5.training$heat)
+fold5.training$ac <- as.factor(fold5.training$ac)
+fold5.training$style <- as.factor(fold5.training$style)
+fold5.training$grade <- as.factor(fold5.training$grade)
+fold5.training$cndtn <- as.factor(fold5.training$cndtn)
+fold5.training$extwall <- as.factor(fold5.training$extwall)
+fold5.training$roof <- as.factor(fold5.training$roof)
+fold5.training$intwall <- as.factor(fold5.training$intwall)
+fold5.training$nbhd <- as.factor(fold5.training$nbhd)
+fold5.training$ward <- as.factor(fold5.training$ward)
+fold5.training$quadrant <- as.factor(fold5.training$quadrant)
+fold5.training$rmdled <- as.factor(fold5.training$rmdled)
+fold5.training$location <- as.factor(fold5.training$location)
+fold5.testing$heat <- as.factor(fold5.testing$heat)
+fold5.testing$ac <- as.factor(fold5.testing$ac)
+fold5.testing$style <- as.factor(fold5.testing$style)
+fold5.testing$grade <- as.factor(fold5.testing$grade)
+fold5.testing$cndtn <- as.factor(fold5.testing$cndtn)
+fold5.testing$extwall <- as.factor(fold5.testing$extwall)
+fold5.testing$roof <- as.factor(fold5.testing$roof)
+fold5.testing$intwall <- as.factor(fold5.testing$intwall)
+fold5.testing$nbhd <- as.factor(fold5.testing$nbhd)
+fold5.testing$ward <- as.factor(fold5.testing$ward)
+fold5.testing$quadrant <- as.factor(fold5.testing$quadrant)
+fold5.testing$rmdled <- as.factor(fold5.testing$rmdled)
+fold5.testing$location <- as.factor(fold5.testing$location)
+heat.mismatched5 <- setdiff(levels(fold5.testing$heat), levels(fold5.training$heat))
+ac.mismatched5 <- setdiff(levels(fold5.testing$ac), levels(fold5.training$ac))
+style.mismatched5 <- setdiff(levels(fold5.testing$style), levels(fold5.training$style))
+grade.mismatched5 <- setdiff(levels(fold5.testing$grade), levels(fold5.training$grade))
+cndtn.mismatched5 <- setdiff(levels(fold5.testing$cndtn), levels(fold5.training$cndtn))
+extwall.mismatched5 <- setdiff(levels(fold5.testing$extwall), levels(fold5.training$extwall))
+roof.mismatched5 <- setdiff(levels(fold5.testing$roof), levels(fold5.training$roof))
+intwall.mismatched5 <- setdiff(levels(fold5.testing$intwall), levels(fold5.training$intwall))
+nbhd.mismatched5 <- setdiff(levels(fold5.testing$nbhd), levels(fold5.training$nbhd))
+ward.mismatched5 <- setdiff(levels(fold5.testing$ward), levels(fold5.training$ward))
+quadrant.mismatched5 <- setdiff(levels(fold5.testing$quadrant), levels(fold5.training$quadrant))
+rmdled.mismatched5 <- setdiff(levels(fold5.testing$rmdled), levels(fold5.training$rmdled))
+location.mismatched5 <- setdiff(levels(fold5.testing$location), levels(fold5.training$location))
+## Only heat has mismatches in fold5
+heat.mismatched5
+
+avgprice.EvpC5 <- mean(fold5.testing$price[fold5.testing$heat == "Evp Cool"])
+heat.levels5 <- levels(fold5.training$heat)
+avgprices.heat5 <- numeric(length(heat.levels5))
+for (i in 1:length(heat.levels5)) {
+  avgprices.heat5[i] <- mean(fold5.training$price[fold5.training$heat == heat.levels5[i]])
+}; heat.cloestmatch5 <- heat.levels5[which.min(abs(avgprices.heat5 - avgprice.EvpC5))]
+heat.cloestmatch5
+```
+
+\newpage
+
+# Five-Fold CV functions
+
+## For Smoothing
+```{r 5-Fold CV function for Smoothing}
+CV.SM <- function(formula) {
+  RMLSEs <- numeric(5)
+  for(i in 1:5) {
+    testing <- dat[which(fold==i), ]
+    training <- dat[which(fold!=i), ]
+    if (i == 1) {
+      testing$roof[testing$roof=="Composition Ro"] <- "Comp Shingle"
+      testing$intwall[testing$intwall=="Terrazo"] <- "Parquet"
+      testing$intwall[testing$intwall=="Vinyl Sheet"] <- "Parquet"
+    } else if (i == 2) {
+      testing$heat[testing$heat=="Air Exchng"] <- "Ht Pump"
+      testing$nbhd[testing$nbhd=="C2"] <- "C3"
+    } else if (i == 3) {
+      testing$style[testing$style=="Default"] <- "2 Story"
+      testing$roof[testing$roof=="Metal- Pre"] <- "Composition Ro"
+    } else if (i == 4) {
+      testing$extwall[testing$extwall=="Stucco Block"] <- "Aluminum"
+      testing$intwall[testing$intwall=="Parquet"] <- "Default"
+      testing$nbhd[testing$nbhd=="C2"] <- "C3"
+      testing$nbhd[testing$nbhd=="F4"] <- "F5"
+    } else {
+      testing$heat[testing$heat=="Evp Cool"] <- "Elec Base Brd"
+    }
+    model <- mgcv::gam(formula, data=training)
+    pred <- predict(model, newdata=testing)
+    RMLSEs[i] <- sqrt(mean((testing$price - pred)^2))
+  }
+  mean(RMLSEs)
+}
+```
+
+## For Random Forest
+```{r 5-Fold CV function for Random Forest}
+CV.RF <- function(formula, mtry=10, nodesize=1, ntree=500) {
+  RMLSEs <- numeric(5)
+  for (i in 1:5) {
+    testing <- dat[which(fold==i), ]
+    training <- dat[which(fold!=i), ]
+    model <- randomForest::randomForest(formula, mtry=mtry, ntree=ntree,
+                                        nodesize=nodesize, data=training)
+    pred <- predict(model, newdata=testing)
+    RMLSEs[i] <- sqrt(mean((testing$price - pred)^2))
+  }
+  mean(RMLSEs)
+}
+```
+
+## For Boosting
+```{r 5-Fold CV function for Boosting}
+CV.BT <- function(formula, shrinkage=0.1, n.trees=100, interaction.depth=1) {
+  RMLSEs <- numeric(5)
+  for(i in 1:5) {
+    testing <- dat[which(fold==i), ]
+    training <- dat[which(fold!=i), ]
+    training$heat <- as.factor(training$heat)
+    training$ac <- as.factor(training$ac)
+    training$style <- as.factor(training$style)
+    training$grade <- as.factor(training$grade)
+    training$cndtn <- as.factor(training$cndtn)
+    training$extwall <- as.factor(training$extwall)
+    training$roof <- as.factor(training$roof)
+    training$intwall <- as.factor(training$intwall)
+    training$nbhd <- as.factor(training$nbhd)
+    training$ward <- as.factor(training$ward)
+    training$quadrant <- as.factor(training$quadrant)
+    training$rmdled <- as.factor(training$rmdled)
+    training$location <- as.factor(training$location)
+    testing$heat <- as.factor(testing$heat)
+    testing$ac <- as.factor(testing$ac)
+    testing$style <- as.factor(testing$style)
+    testing$grade <- as.factor(testing$grade)
+    testing$cndtn <- as.factor(testing$cndtn)
+    testing$extwall <- as.factor(testing$extwall)
+    testing$roof <- as.factor(testing$roof)
+    testing$intwall <- as.factor(testing$intwall)
+    testing$nbhd <- as.factor(testing$nbhd)
+    testing$ward <- as.factor(testing$ward)
+    testing$quadrant <- as.factor(testing$quadrant)
+    testing$rmdled <- as.factor(testing$rmdled)
+    testing$location <- as.factor(testing$location)
+    model <- gbm::gbm(formula, data=training, distribution="gaussian", 
+                      shrinkage=shrinkage, n.trees=n.trees, 
+                      interaction.depth=interaction.depth,
+                      bag.fraction=1)
+    pred <- predict(model, newdata=testing)
+    RMLSEs[i] <- sqrt(mean((testing$price - pred)^2))
+  }
+  mean(RMLSEs)
+}
+```
+
+\newpage
+
+# Model building
+
+## Smoothing Models
+
+### Fit a full model without smoothing terms
+```{r First fit a full model without smoothing terms, cache=TRUE}
+smoothing1.formula <- formula(price ~ bathrm + rooms + ayb + yr_rmdl + eyb + 
+                                      stories + saledate + gba + landarea + 
+                                      latitude + longitude + dsRM + dsIM + dsBT
+                                      + hf_bathrm + bedrm + kitchens + 
+                                      fireplaces +
+                                      heat + ac + style + grade + cndtn +
+                                      extwall + roof + intwall + nbhd + ward + 
+                                      quadrant + rmdled + location)
+SCV.result1 <- CV.SM(smoothing1.formula); SCV.result1
+```
+
+### Next fit a full model with smoothing terms
+```{r Next fit a full model with smoothing terms, cache=TRUE}
+smoothing2.formula <- formula(price ~ s(bathrm) + s(rooms) + s(ayb) + s(yr_rmdl)
+                                      + s(eyb) + stories + s(saledate) + 
+                                      s(gba) + s(landarea) + s(latitude) + 
+                                      s(longitude) + s(dsRM) + s(dsIM) + s(dsBT)
+                                      + hf_bathrm + bedrm + kitchens + 
+                                      fireplaces + 
+                                      heat + ac + style + grade + 
+                                      cndtn + extwall + roof + intwall + nbhd +
+                                      ward + quadrant + rmdled + location)
+SCV.result2 <- CV.SM(smoothing2.formula); SCV.result2
+smoothing2 <- mgcv::gam(smoothing2.formula, data=dat)
+summary(smoothing2)
+```
+
+### Then fit a reduced model
+```{r Then fit a reduced model, cache=TRUE}
+## stories, kitchens, extwall, and rmdled are removed
+smoothing3.formula <- formula(price ~ s(bathrm) + s(rooms) + s(ayb) + s(yr_rmdl)
+                                      + s(eyb) + s(saledate) + s(gba) + 
+                                      s(landarea) + s(latitude) + s(longitude) +
+                                      s(dsRM) + s(dsIM) + s(dsBT) + hf_bathrm + 
+                                      bedrm + fireplaces + 
+                                      heat + ac + style + grade + 
+                                      cndtn + roof + intwall + nbhd +
+                                      ward + quadrant + location)
+SCV.result3 <- CV.SM(smoothing3.formula); SCV.result3
+smoothing3 <- mgcv::gam(smoothing3.formula, data=dat)
+gam.check(smoothing3)
+```
+
+### Then grid-searching on k of bathrm for the reduced model
+```{r Then grid-search on k of bathrm for the reduced model, cache=TRUE}
+bathrm.ks <- c(6, 7, 8, 9, 10)
+bathrm.CVs <- numeric(length(bathrm.ks))
+for (i in 1:length(bathrm.ks)) {
+  formula <- formula(price ~ s(bathrm, k=bathrm.ks[i]) + s(rooms) + s(ayb) + 
+                             s(yr_rmdl) + s(eyb) + s(saledate) + s(gba) + 
+                             s(landarea) + s(latitude) + s(longitude) + 
+                             s(dsRM) + s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location)
+  bathrm.CVs[i] <- CV.SM(formula)
+}; bathrm.ks[which.min(bathrm.CVs)]; min(bathrm.CVs)
+```
+
+### Then grid-searching on k of rooms for the reduced model
+```{r Then grid-search on k of rooms for the reduced model, cache=TRUE}
+rooms.ks <- c(7, 8, 9, 10, 11)
+rooms.CVs <- numeric(length(rooms.ks))
+for (i in 1:length(rooms.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=rooms.ks[i]) + 
+                             s(ayb) + s(yr_rmdl) + s(eyb) + s(saledate) + 
+                             s(gba) + s(landarea) + s(latitude) + 
+                             s(longitude) + s(dsRM) + s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location)
+  rooms.CVs[i] <- CV.SM(formula)
+}; rooms.ks[which.min(rooms.CVs)]; min(rooms.CVs)
+```
+
+### Then grid-searching on k of ayb for the reduced model
+```{r Then grid-search on k of ayb for the reduced model, cache=TRUE}
+ayb.ks <- c(5, 10, 15, 20, 25)
+ayb.CVs <- numeric(length(ayb.ks))
+for (i in 1:length(ayb.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + 
+                             s(ayb, k=ayb.ks[i]) + s(yr_rmdl) + s(eyb) + 
+                             s(saledate) + s(gba) + s(landarea) + s(latitude) +
+                             s(longitude) + s(dsRM) + s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location)
+  ayb.CVs[i] <- CV.SM(formula)
+}; ayb.ks[which.min(ayb.CVs)]; min(ayb.CVs)
+```
+
+### Then grid-searching on k of yr_rmdl for the reduced model
+```{r Then grid-search on k of yr_rmdl for the reduced model, cache=TRUE}
+yr_rmdl.ks <- c(15, 20, 25, 30, 35)
+yr_rmdl.CVs <- numeric(length(yr_rmdl.ks))
+for (i in 1:length(yr_rmdl.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=yr_rmdl.ks[i]) + s(eyb) + s(saledate) + s(gba) + 
+                             s(landarea) + s(latitude) + s(longitude) + 
+                             s(dsRM) + s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location)
+  yr_rmdl.CVs[i] <- CV.SM(formula)
+}; yr_rmdl.ks[which.min(yr_rmdl.CVs)]; min(yr_rmdl.CVs)
+```
+
+### Then grid-searching on k of eyb for the reduced model
+```{r Then grid-search on k of eyb for the reduced model, cache=TRUE}
+eyb.ks <- c(45, 55, 60, 65, 70)
+eyb.CVs <- numeric(length(eyb.ks))
+for (i in 1:length(eyb.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=eyb.ks[i]) + 
+                             s(saledate) + s(gba) + s(landarea) + s(latitude) +
+                             s(longitude) + s(dsRM) + s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location)
+  eyb.CVs[i] <- CV.SM(formula)
+}; eyb.ks[which.min(eyb.CVs)]; min(eyb.CVs)
+```
+
+### Then grid-searching on k of saledate for the reduced model
+```{r Then grid-search on k of saledate for the reduced model, cache=TRUE}
+saledate.ks <- c(20, 21, 22, 23, 24, 25)
+saledate.CVs <- numeric(length(saledate.ks))
+for (i in 1:length(saledate.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=65) + 
+                             s(saledate, k=saledate.ks[i]) + s(gba) + 
+                             s(landarea) + s(latitude) + s(longitude) + 
+                             s(dsRM) + s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location)
+  saledate.CVs[i] <- CV.SM(formula)
+}; saledate.ks[which.min(saledate.CVs)]; min(saledate.CVs)
+```
+
+### Then grid-searching on k of gba for the reduced model
+```{r Then grid-search on k of gba for the reduced model, cache=TRUE}
+gba.ks <- c(10, 11, 12, 13, 14)
+gba.CVs <- numeric(length(gba.ks))
+for (i in 1:length(gba.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=65) + 
+                             s(saledate, k=24) + s(gba, k=gba.ks[i]) + 
+                             s(landarea) + s(latitude) + s(longitude) + 
+                             s(dsRM) + s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location)
+  gba.CVs[i] <- CV.SM(formula)
+}; gba.ks[which.min(gba.CVs)]; min(gba.CVs)
+```
+
+### Then grid-searching on k of longitude for the reduced model
+```{r Then grid-search on k of longitude for the reduced model, cache=TRUE}
+longitude.ks <- c(10, 11, 12, 13, 14)
+longitude.CVs <- numeric(length(longitude.ks))
+for (i in 1:length(longitude.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=65) + 
+                             s(saledate, k=24) + s(gba, k=10) + s(landarea) + 
+                             s(latitude) + s(longitude, k=longitude.ks[i]) + 
+                             s(dsRM) + s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location)
+  longitude.CVs[i] <- CV.SM(formula)
+}; longitude.ks[which.min(longitude.CVs)]; min(longitude.CVs)
+```
+
+### Then adding interaction terms1
+```{r Then adding interaction terms1, cache=TRUE}
+smoothing4.formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + 
+                                      s(ayb, k=20) + s(yr_rmdl, k=20) + 
+                                      s(eyb, k=65) + s(saledate, k=24) +
+                                      s(gba, k=10) + s(landarea) + s(latitude) + 
+                                      s(longitude, k=10) + s(dsRM) + s(dsIM) + 
+                                      s(dsBT) + 
+                                      hf_bathrm + bedrm + fireplaces +
+                                      heat + ac + style + grade + cndtn + 
+                                      roof + intwall + nbhd + ward + quadrant + 
+                                      location + 
+                                      te(saledate, ayb))
+SCV.result4 <- CV.SM(smoothing4.formula); SCV.result4
+```
+
+### Then adding interaction terms2
+```{r Then adding interaction terms2, cache=TRUE}
+smoothing5.formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + 
+                                      s(ayb, k=20) + s(yr_rmdl, k=20) + 
+                                      s(eyb, k=65) + s(saledate, k=24) +
+                                      s(gba, k=10) + s(landarea) + s(latitude) + 
+                                      s(longitude, k=10) + s(dsRM) + s(dsIM) + 
+                                      s(dsBT) + 
+                                      hf_bathrm + bedrm + fireplaces +
+                                      heat + ac + style + grade + cndtn + 
+                                      roof + intwall + nbhd + ward + quadrant + 
+                                      location + 
+                                      te(saledate, ayb) + te(saledate, eyb))
+SCV.result5 <- CV.SM(smoothing5.formula); SCV.result5
+```
+
+### Then adding interaction terms3
+```{r Then adding interaction terms3, cache=TRUE}
+smoothing6.formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + 
+                                      s(ayb, k=20) + s(yr_rmdl, k=20) + 
+                                      s(eyb, k=65) + s(saledate, k=24) +
+                                      s(gba, k=10) + s(landarea) + s(latitude) + 
+                                      s(longitude, k=10) + s(dsRM) + s(dsIM) + 
+                                      s(dsBT) + 
+                                      hf_bathrm + bedrm + fireplaces +
+                                      heat + ac + style + grade + cndtn + 
+                                      roof + intwall + nbhd + ward + quadrant + 
+                                      location + 
+                                      te(saledate, ayb) + te(saledate, eyb) + 
+                                      te(saledate, yr_rmdl))
+SCV.result6 <- CV.SM(smoothing6.formula); SCV.result6
+```
+
+### Then adding interaction terms4
+```{r Then adding interaction terms4, cache=TRUE}
+smoothing7.formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + 
+                                      s(ayb, k=20) + s(yr_rmdl, k=20) + 
+                                      s(eyb, k=65) + s(saledate, k=24) +
+                                      s(gba, k=10) + s(landarea) + s(latitude) 
+                                      + s(longitude, k=10) + s(dsRM) + 
+                                      s(dsIM) + s(dsBT) + 
+                                      hf_bathrm + bedrm + fireplaces +
+                                      heat + ac + style + grade + cndtn + 
+                                      roof + intwall + nbhd + ward + quadrant + 
+                                      location + 
+                                      te(saledate, ayb) + te(saledate, eyb) + 
+                                      te(saledate, yr_rmdl) + 
+                                      te(landarea, longitude))
+SCV.result7 <- CV.SM(smoothing7.formula); SCV.result7
+```
+
+### Then adding interaction terms5
+```{r Then adding interaction terms5, cache=TRUE}
+smoothing8.formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + 
+                                      s(ayb, k=20) + s(yr_rmdl, k=20) + 
+                                      s(eyb, k=65) + s(saledate, k=24) +
+                                      s(gba, k=10) + s(landarea) + s(latitude) 
+                                      + s(longitude, k=10) + s(dsRM) + 
+                                      s(dsIM) + s(dsBT) + 
+                                      hf_bathrm + bedrm + fireplaces +
+                                      heat + ac + style + grade + cndtn + 
+                                      roof + intwall + nbhd + ward + quadrant + 
+                                      location + 
+                                      te(saledate, ayb) + te(saledate, eyb) + 
+                                      te(saledate, yr_rmdl) + 
+                                      te(landarea, longitude) + 
+                                      te(landarea, latitude))
+SCV.result8 <- CV.SM(smoothing8.formula); SCV.result8
+```
+
+### Then grid-searching on k of interaction term1
+```{r Then grid-search on k of interaction term1, cache=TRUE}
+int1.ks <- c(8, 9, 11)
+int1.CVs <- numeric(length(int1.ks))
+for (i in 1:length(int1.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=65) + 
+                             s(saledate, k=24) + s(gba, k=10) + s(landarea) + 
+                             s(latitude) + s(longitude, k=10) + s(dsRM) + 
+                             s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location + 
+                             te(saledate, ayb, k=int1.ks[i]) + 
+                             te(saledate, eyb) + te(saledate, yr_rmdl) + 
+                             te(landarea, longitude) + te(landarea, latitude))
+  int1.CVs[i] <- CV.SM(formula)
+}; int1.ks[which.min(int1.CVs)]; min(int1.CVs)
+```
+
+### Then grid-searching on k of interaction term2
+```{r Then grid-search on k of interaction term2, cache=TRUE}
+int2.ks <- c(8, 9, 11)
+int2.CVs <- numeric(length(int2.ks))
+for (i in 1:length(int2.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=65) + 
+                             s(saledate, k=24) + s(gba, k=10) + s(landarea) + 
+                             s(latitude) + s(longitude, k=10) + s(dsRM) + 
+                             s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location + 
+                             te(saledate, ayb, k=9) + 
+                             te(saledate, eyb, k=int2.ks[i]) + 
+                             te(saledate, yr_rmdl) + te(landarea, longitude) + 
+                             te(landarea, latitude))
+  int2.CVs[i] <- CV.SM(formula)
+}; int2.ks[which.min(int2.CVs)]; min(int2.CVs)
+```
+
+### Then grid-searching on k of interaction term3
+```{r Then grid-search on k of interaction term3, cache=TRUE}
+int3.ks <- c(8, 9, 11)
+int3.CVs <- numeric(length(int3.ks))
+for (i in 1:length(int3.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=65) + 
+                             s(saledate, k=24) + s(gba, k=10) + s(landarea) + 
+                             s(latitude) + s(longitude, k=10) + s(dsRM) + 
+                             s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location + 
+                             te(saledate, ayb, k=9) + te(saledate, eyb, k=8) + 
+                             te(saledate, yr_rmdl, k=int3.ks[i]) + 
+                             te(landarea, longitude) + te(landarea, latitude))
+  int3.CVs[i] <- CV.SM(formula)
+}; int3.ks[which.min(int3.CVs)]; min(int3.CVs)
+```
+
+### Then grid-searching on k of interaction term4
+```{r Then grid-search on k of interaction term4, cache=TRUE}
+int4.ks <- c(8, 9, 11)
+int4.CVs <- numeric(length(int4.ks))
+for (i in 1:length(int4.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=65) + 
+                             s(saledate, k=24) + s(gba, k=10) + s(landarea) + 
+                             s(latitude) + s(longitude, k=10) + s(dsRM) + 
+                             s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location + 
+                             te(saledate, ayb, k=9) + 
+                             te(saledate, eyb, k=8) + 
+                             te(saledate, yr_rmdl, k=9) + 
+                             te(landarea, longitude, k=int4.ks[i]) + 
+                             te(landarea, latitude))
+  int4.CVs[i] <- CV.SM(formula)
+}; int4.ks[which.min(int4.CVs)]; min(int4.CVs)
+```
+The above k values for this interaction term do not decrease the CV score, so 
+default k is used.
+
+### Then grid-searching on k of interaction term5
+```{r Then grid-search on k of interaction term5, cache=TRUE}
+int5.ks <- c(8, 9, 11)
+int5.CVs <- numeric(length(int5.ks))
+for (i in 1:length(int5.ks)) {
+  formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + s(ayb, k=20) + 
+                             s(yr_rmdl, k=20) + s(eyb, k=65) + 
+                             s(saledate, k=24) + s(gba, k=10) + s(landarea) + 
+                             s(latitude) + s(longitude, k=10) + s(dsRM) + 
+                             s(dsIM) + s(dsBT) + 
+                             hf_bathrm + bedrm + fireplaces +
+                             heat + ac + style + grade + cndtn + roof + 
+                             intwall + nbhd + ward + quadrant + location + 
+                             te(saledate, ayb, k=9) + 
+                             te(saledate, eyb, k=10) +
+                             te(saledate, yr_rmdl) + 
+                             te(landarea, longitude) + 
+                             te(landarea, latitude, k=int5.ks[i]))
+  int5.CVs[i] <- CV.SM(formula)
+}; int5.ks[which.min(int5.CVs)]; min(int5.CVs)
+```
+The above k values for this interaction term do not decrease the CV score, so 
+default k is used.
+
+### The final smoothing model
+```{r The final smoothing model, cache=TRUE}
+finalSM.formula <- formula(price ~ s(bathrm, k=10) + s(rooms, k=10) + 
+                                   s(ayb, k=20) + s(yr_rmdl, k=20) + 
+                                   s(eyb, k=65) + s(saledate, k=24) + 
+                                   s(gba, k=10) + s(landarea) + s(latitude) + 
+                                   s(longitude, k=10) + s(dsRM) + s(dsIM) + 
+                                   s(dsBT) + hf_bathrm + bedrm + fireplaces +
+                                   heat + ac + style + grade + cndtn + roof + 
+                                   intwall + nbhd + ward + quadrant + 
+                                   location + te(saledate, ayb, k=9) + 
+                                   te(saledate, eyb, k=10) + 
+                                   te(saledate, yr_rmdl) + 
+                                   te(landarea, longitude) + 
+                                   te(landarea, latitude))
+finalSM <- mgcv::gam(finalSM.formula, data=dat)
+```
+
+## Random Forest Models
+
+### First fit a full Random Forest model
+```{r full model, echo=TRUE, cache=TRUE}
+full.formula <- formula(price ~ heat + ac + style + grade + cndtn + extwall +
+                                roof + intwall + nbhd + ward + quadrant + 
+                                location + rmdled + bathrm + hf_bathrm + rooms +
+                                bedrm + ayb + yr_rmdl + eyb + stories + saledate
+                                + gba + kitchens + fireplaces + landarea + 
+                                latitude + longitude + dsRM + dsIM + dsBT)
+RFfull.result <- CV.RF(formula=full.formula); RFfull.result
+RFfull <- randomForest::randomForest(full.formula, data=dat)
+rfPermute::importance(RFfull, data=dat, target="price")
+```
+
+### Next remove insigificant variables
+```{r Next remove insigificant variables, echo=TRUE, cache=TRUE}
+## kitchens removed
+RFre.formula <- formula(price ~ heat + ac + style + grade + cndtn + extwall +
+                                roof + intwall + nbhd + ward + quadrant + 
+                                location + rmdled + bathrm + hf_bathrm + rooms +
+                                bedrm + ayb + yr_rmdl + eyb + stories + 
+                                saledate + gba + fireplaces + landarea + 
+                                latitude + longitude + dsRM + dsIM + dsBT)
+RFre.result <- CV.RF(formula=RFre.formula); RFre.result
+```
+
+### Grid-searching on mtry
+```{r mtrys, echo=TRUE, cache=TRUE}
+mtrys <- seq(11, 18, by=1)
+mtry.results <- numeric(length(mtrys))
+for (i in 1:length(mtrys)) {
+  mtry.results[i] <- CV.RF(formula=RFre.formula, mtry=mtrys[i])
+}; mtry.results; min(mtry.results)
+mtry.best <- mtrys[which.min(mtry.results)]; mtry.best
+```
+
+### Fix mtry and grid-searching on nodesize
+```{r nodesizes, echo=TRUE, cache=TRUE}
+nodesizes <- seq(1, 6, by=1)
+nodesize.results <- numeric(length(nodesizes))
+for (i in 1:length(nodesizes)) {
+  nodesize.results[i] <- CV.RF(formula=RFre.formula, mtry=mtry.best, 
+                               nodesize=nodesizes[i])
+}; nodesize.results; min(nodesize.results)
+nodesize.best <- nodesizes[which.min(nodesize.results)]; nodesize.best
+```
+
+### Fix mtry, nodesize and then grid-searching on ntree
+```{r ntrees, echo=TRUE, cache=TRUE}
+ntrees <- c(350, 400, 450, 525, 550)
+ntrees.results <- numeric(length(ntrees))
+for (i in 1:length(ntrees)) {
+  ntrees.results[i] <- CV.RF(formula=RFre.formula, mtry=mtry.best, 
+                             nodesize=nodesize.best, ntree=ntrees[i])
+}; ntrees.results; min(ntrees.results)
+ntree.best <- ntrees[which.min(ntrees.results)]; ntree.best
+```
+
+### The final Random Forest model
+```{r Final RF model, cache=TRUE}
+finalRF.formula <- formula(price ~ heat + ac + style + grade + cndtn + extwall +
+                                   roof + intwall + nbhd + ward + quadrant + 
+                                   location + rmdled + bathrm + hf_bathrm + 
+                                   rooms + bedrm + ayb + yr_rmdl + eyb + 
+                                   stories + saledate + gba + fireplaces + 
+                                   landarea + latitude + longitude + 
+                                   dsRM + dsIM + dsBT)
+finalRF <- randomForest::randomForest(finalRF.formula, mtry=mtry.best, 
+                                      nodesize=nodesize.best, 
+                                      ntree=ntree.best, data=dat)
+```
+
+## Boosting Models
+```{r Pre-Boosting, cache=TRUE, message=FALSE}
+dat.copy <- dat
+
+dat.copy$heat <- as.factor(dat.copy$heat)
+dat.copy$ac <- as.factor(dat.copy$ac)
+dat.copy$style <- as.factor(dat.copy$style)
+dat.copy$grade <- as.factor(dat.copy$grade)
+dat.copy$cndtn <- as.factor(dat.copy$cndtn)
+dat.copy$extwall <- as.factor(dat.copy$extwall)
+dat.copy$roof <- as.factor(dat.copy$roof)
+dat.copy$intwall <- as.factor(dat.copy$intwall)
+dat.copy$nbhd <- as.factor(dat.copy$nbhd)
+dat.copy$ward <- as.factor(dat.copy$ward)
+dat.copy$quadrant <- as.factor(dat.copy$quadrant)
+dat.copy$rmdled <- as.factor(dat.copy$rmdled)
+dat.copy$location <- as.factor(dat.copy$location)
+```
+
+### First fit a full Boosting model
+```{r First fit a full Boosting model, cache=TRUE, message=FALSE}
+gbm.formula <- formula(price ~ heat + ac + style + grade + cndtn + extwall +
+                               roof + intwall + nbhd + ward + quadrant + 
+                               location + rmdled + bathrm + hf_bathrm + rooms +
+                               bedrm + ayb + yr_rmdl + eyb + stories + saledate
+                               + gba + kitchens + fireplaces + landarea + 
+                               latitude + longitude + dsRM + dsIM + dsBT)
+gbm.CV <- CV.BT(gbm.formula); gbm.CV
+gbm <- gbm::gbm(formula=gbm.formula, distribution="gaussian", 
+                bag.fraction=1, data=dat.copy)
+relative.influence(gbm)
+```
+
+### Next remove some of the insignificant terms
+```{r Next remove some of the insignificant terms, cache=TRUE, message=FALSE}
+reduced.formula <- formula(price ~ grade + cndtn + nbhd + ward + bathrm + 
+                                   hf_bathrm + bedrm + eyb + saledate + gba + 
+                                   landarea + longitude + dsRM + dsIM + dsBT)
+CV.BT(formula=reduced.formula)
+```
+The CV score of the reduced model hardly changes, so the full Boosting 
+model is kept.
+
+### Then grid-searching on interaction.depth
+```{r Then grid-searching on interactions, cache=TRUE, message=FALSE}
+interactions <- c(2, 3, 4, 5, 6, 7, 8, 9, 10)
+interactions.results <- numeric(length(interactions))
+for (i in 1:length(interactions)) {
+  interactions.results[i] <- CV.BT(formula=gbm.formula, 
+                                   interaction.depth=interactions[i])
+}; interactions.results; min(interactions.results)
+interactions.best <- interactions[which.min(interactions.results)]
+interactions.best
+```
+
+### Then grid-searching on n.treeses
+```{r Then grid-searching on n.treeses, cache=TRUE, message=FALSE}
+n.treeses <- c(100, 150, 200, 250, 300, 325, 350, 375, 
+               400, 450, 500, 550, 600, 650, 700)
+n.treeses.results <- numeric(length(n.treeses))
+for (i in 1:length(n.treeses)) {
+  n.treeses.results[i] <- CV.BT(formula=gbm.formula, 
+                                interaction.depth=interactions.best,
+                                n.trees=n.treeses[i])
+}; n.treeses.results; min(n.treeses.results)
+n.treeses.best <- n.treeses[which.min(n.treeses.results)]; n.treeses.best
+```
+
+### Then grid-searching on shrinkages
+```{r Then grid-searching on shrinkages, cache=TRUE, message=FALSE}
+shrinkages <- c(0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 
+                0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+shrinkages.results <- numeric(length(shrinkages))
+for (i in 1:length(shrinkages)) {
+  shrinkages.results[i] <- CV.BT(formula=gbm.formula, 
+                                 interaction.depth=interactions.best, 
+                                 n.trees=n.treeses.best, 
+                                 shrinkage=shrinkages[i])
+}; shrinkages.results; min(shrinkages.results)
+shrinkages.best <- shrinkages[which.min(shrinkages.results)]; shrinkages.best
+```
+
+### The final Boosting model
+```{r The final Boosting model, cache=TRUE, message=FALSE}
+finalGBM.formula <- formula(price ~ heat + ac + style + grade + cndtn + 
+                                    extwall + roof + intwall + nbhd + ward + 
+                                    quadrant + location + rmdled + bathrm + 
+                                    hf_bathrm + rooms + bedrm + ayb + 
+                                    yr_rmdl + eyb + stories + saledate + gba + 
+                                    kitchens + fireplaces + landarea + 
+                                    latitude + longitude + dsRM + dsIM + dsBT)
+finalGBM <- gbm::gbm(formula=finalGBM.formula, distribution="gaussian", 
+                     bag.fraction=1, shrinkage=shrinkages.best, 
+                     interaction.depth=interactions.best, 
+                     n.trees=n.treeses.best, 
+                     data=dat.copy)
+```
