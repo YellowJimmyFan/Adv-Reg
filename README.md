@@ -1,0 +1,2 @@
+# Adv-Reg
+NO COPYING
